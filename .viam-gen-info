@@ -1,0 +1,12 @@
+{
+  "module_name": "yolo-onnx",
+  "namespace": "hipsterbrown",
+  "language": "go",
+  "resource_type": "service",
+  "resource_subtype": "mlmodel",
+  "model_name": "yolo-onnx-cpu",
+  "enable_cloud_build": true,
+  "initialize_git": false,
+  "generator_version": "0.1.0",
+  "generated_on": "2025-04-02T14:39:16.962061Z"
+}

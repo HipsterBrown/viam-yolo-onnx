@@ -1,0 +1,28 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "hipsterbrown:yolo-onnx",
+  "visibility": "public",
+  "url": "https://github.com/hipsterbrown/viam-yolo-onnx",
+  "description": "Modular mlmodel service: yolo-onnx-cpu",
+  "models": [
+    {
+      "api": "rdk:service:mlmodel",
+      "model": "hipsterbrown:yolo-onnx:yolo-onnx-cpu",
+      "short_description": "Use YOLO-based models as the backend with the mlmodel vision service",
+      "markdown_link": "README.md#model-hipsterbrownyolo-onnxyolo-onnx-cpu"
+    }
+  ],
+  "applications": null,
+  "entrypoint": "bin/yolo-onnx",
+  "first_run": "",
+  "build": {
+    "build": "make module.tar.gz",
+    "setup": "make setup",
+    "path": "module.tar.gz",
+    "arch": [
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/arm64"
+    ]
+  }
+}
