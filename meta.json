@@ -7,9 +7,9 @@
   "models": [
     {
       "api": "rdk:service:mlmodel",
-      "model": "hipsterbrown:yolo-onnx:yolo-onnx-cpu",
+      "model": "hipsterbrown:mlmodel:yolo-onnx",
       "short_description": "Use YOLO-based models as the backend with the mlmodel vision service",
-      "markdown_link": "README.md#model-hipsterbrownyolo-onnxyolo-onnx-cpu"
+      "markdown_link": "README.md#model-hipsterbrownmlmodelyolo-onnx"
     }
   ],
   "applications": null,

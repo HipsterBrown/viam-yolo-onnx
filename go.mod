@@ -6,7 +6,7 @@ toolchain go1.24.1
 
 require (
 	github.com/pkg/errors v0.9.1
-	github.com/yalue/onnxruntime_go v1.8.0
+	github.com/yalue/onnxruntime_go v1.17.0
 	go.viam.com/rdk v0.69.0
 	go.viam.com/utils v0.1.137
 	gorgonia.org/tensor v0.9.24

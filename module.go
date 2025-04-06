@@ -3,9 +3,14 @@ package yoloonnx
 import (
 	"context"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"os"
 	"path"
 	"runtime"
-	"strings"
+	"sort"
+	"time"
 
 	"github.com/pkg/errors"
 	ort "github.com/yalue/onnxruntime_go"
@@ -19,17 +24,21 @@ import (
 )
 
 var (
-	YoloOnnxCpu      = resource.NewModel("hipsterbrown", "yolo-onnx", "yolo-onnx-cpu")
+	YoloOnnxCpu      = resource.NewModel("hipsterbrown", "mlmodel", "yolo-onnx")
 	errUnimplemented = errors.New("unimplemented")
 )
+
+var imageHeight, imageWidth int
+
+const DEBUG_INPUT = false
+const IMAGE_SIZE = 576 // 90% of the input size which keeps the gRPC message from exceeding the 4MB limit
+const INPUT_SIZE = 640
 
 // DataTypeMap maps the long ONNX data type labels to the data type as written in Go.
 var DataTypeMap = map[ort.TensorElementDataType]string{
 	ort.TensorElementDataTypeFloat: "float32",
 	ort.TensorElementDataTypeUint8: "uint8",
 }
-
-var blank []float32
 
 func init() {
 	resource.RegisterService(mlmodel.API, YoloOnnxCpu,
@@ -40,20 +49,6 @@ func init() {
 }
 
 type Config struct {
-	/*
-		Put config attributes here. There should be public/exported fields
-		with a `json` parameter at the end of each attribute.
-
-		Example config struct:
-			type Config struct {
-				Pin   string `json:"pin"`
-				Board string `json:"board"`
-				MinDeg *float64 `json:"min_angle_deg,omitempty"`
-			}
-
-		If your model does not need a config, replace *Config in the init
-		function with resource.NoNativeConfig
-	*/
 	ModelPath string `json:"model_path"`
 	LabelPath string `json:"label_path"`
 }
@@ -134,18 +129,13 @@ func NewYoloOnnxCpu(ctx context.Context, deps resource.Dependencies, name resour
 	}
 	// create the metadata
 	yolo.metadata = createMetadata(outputInfo, conf.LabelPath)
-	// declare the input Tensor for the YOLO model
-	// fill blank tensor with an "image" of the correct size
-	// the image
-	blank = make([]float32, 640*640*3)
 	inputShape := ort.NewShape(1, 3, 640, 640)
-	inputTensor, err := ort.NewTensor(inputShape, blank)
+	inputTensor, err := ort.NewEmptyTensor[float32](inputShape)
 	if err != nil {
 		return nil, err
 	}
 
 	out0OrtTensorInfo := outputInfo[0]
-	// detection_anchor_indices
 	outputShape0 := ort.NewShape(out0OrtTensorInfo.Dimensions...)
 	outputTensor0, err := ort.NewEmptyTensor[float32](outputShape0)
 	if err != nil {
@@ -155,6 +145,15 @@ func NewYoloOnnxCpu(ctx context.Context, deps resource.Dependencies, name resour
 	options, err := ort.NewSessionOptions()
 	if err != nil {
 		return nil, err
+	}
+
+	if runtime.GOOS == "darwin" {
+		err = options.AppendExecutionProviderCoreML(0)
+		if err != nil {
+			inputTensor.Destroy()
+			outputTensor0.Destroy()
+			return nil, fmt.Errorf("Error enabling CoreML: %w", err)
+		}
 	}
 
 	session, err := ort.NewAdvancedSession(conf.ModelPath,
@@ -250,9 +249,105 @@ func processInput(tensors ml.Tensors) ([]float32, error) {
 		return nil, errors.New("no valid input tensor called 'image' or 'images' found")
 	}
 	if float32Data, ok := imageTensor.Data().([]float32); ok {
+		// Get the shape of the input tensor
+		shape := imageTensor.Shape()
+		imageHeight, imageWidth = shape[2], shape[3]
+		if imageHeight != INPUT_SIZE || imageWidth != INPUT_SIZE {
+			// Need to pad from image height/width to INPUT_SIZE
+			paddedData := make([]float32, 1*3*INPUT_SIZE*INPUT_SIZE)
+
+			// Calculate padding offsets to center the original image
+			offsetY := (INPUT_SIZE - imageHeight) / 2
+			offsetX := (INPUT_SIZE - imageWidth) / 2
+
+			// Copy the original data to the center of the padded tensor
+			for c := range 3 { // For each channel
+				for y := range imageHeight {
+					for x := range imageWidth {
+						srcIdx := ((0*3+c)*imageHeight+y)*imageWidth + x
+						dstIdx := ((0*3+c)*INPUT_SIZE+(y+offsetY))*INPUT_SIZE + (x + offsetX)
+						paddedData[dstIdx] = float32Data[srcIdx]
+					}
+				}
+			}
+
+			if DEBUG_INPUT {
+				width, height := INPUT_SIZE, INPUT_SIZE
+				img := image.NewRGBA(image.Rect(0, 0, width, height))
+				channelSize := width * height
+
+				for y := range height {
+					for x := range width {
+						i := y*width + x
+						// CHW format: C = 3 (RGB)
+						r := paddedData[i] * 255
+						g := paddedData[channelSize+i] * 255
+						b := paddedData[2*channelSize+i] * 255
+
+						// Convert float32 [0,1] or [0,255] to uint8 (scale if needed)
+						img.Set(x, y, color.RGBA{
+							R: uint8(clamp(r, 0, 255)),
+							G: uint8(clamp(g, 0, 255)),
+							B: uint8(clamp(b, 0, 255)),
+							A: 255,
+						})
+					}
+				}
+
+				outFile, err := os.Create(fmt.Sprintf("padded_input_%s.jpeg", time.Now()))
+				if err != nil {
+					return nil, err
+				}
+				defer outFile.Close()
+
+				err = jpeg.Encode(outFile, img, &jpeg.Options{Quality: 90})
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			return paddedData, nil
+		}
 		return float32Data, nil
 	}
-	return nil, errors.Errorf("input tensor must be of tensor type UIn8, got %v", imageTensor.Dtype())
+	return nil, errors.Errorf("input tensor must be of tensor type float32, got %v", imageTensor.Dtype())
+}
+
+type boundingBox struct {
+	classId        float32
+	confidence     float32
+	x1, y1, x2, y2 float32
+}
+
+func (b *boundingBox) String() string {
+	return fmt.Sprintf("Object %f (confidence %f): (%f, %f), (%f, %f)",
+		b.classId, b.confidence, b.x1, b.y1, b.x2, b.y2)
+}
+
+func (b *boundingBox) toRect() image.Rectangle {
+	return image.Rect(int(b.x1), int(b.y1), int(b.x2), int(b.y2)).Canon()
+}
+
+func (b *boundingBox) rectArea() int {
+	size := b.toRect().Size()
+	return size.X * size.Y
+}
+
+func (b *boundingBox) intersection(other *boundingBox) float32 {
+	r1 := b.toRect()
+	r2 := other.toRect()
+	intersected := r1.Intersect(r2).Canon().Size()
+	return float32(intersected.X * intersected.Y)
+}
+
+func (b *boundingBox) union(other *boundingBox) float32 {
+	intersectArea := b.intersection(other)
+	totalArea := float32(b.rectArea() + other.rectArea())
+	return totalArea - intersectArea
+}
+
+func (b *boundingBox) iou(other *boundingBox) float32 {
+	return b.intersection(other) / b.union(other)
 }
 
 func (yolo *yoloOnnxYoloOnnxCpu) processOutput(output []float32) (ml.Tensors, error) {
@@ -261,7 +356,6 @@ func (yolo *yoloOnnxYoloOnnxCpu) processOutput(output []float32) (ml.Tensors, er
 	if len(outputShape) != 3 {
 		return nil, fmt.Errorf("unexpected output shape for YOLO model: %v", outputShape)
 	}
-	yolo.logger.Info(len(output))
 	numChannels := int(outputShape[1])
 	numBoxes := int(outputShape[2])
 	numClasses := numChannels - 4
@@ -270,30 +364,75 @@ func (yolo *yoloOnnxYoloOnnxCpu) processOutput(output []float32) (ml.Tensors, er
 	scoresData := make([]float32, numBoxes)
 	classProbsData := make([]float32, numBoxes)
 
-	for i := range 4 {
-		for j := range numBoxes {
-			boxesData[j*4+i] = output[i*numBoxes+j]
-		}
-	}
+	var classId float32
+	var probability float32
 
-	for i := range numBoxes {
-		maxClassScore := float32(0)
-		maxClassIndex := float32(0)
+	boundingBoxes := make([]boundingBox, 0, numBoxes)
 
-		for j := range numClasses {
-			channelIdx := 4 + j
+	offsetX := (INPUT_SIZE - imageWidth) / 2
+	offsetY := (INPUT_SIZE - imageHeight) / 2
+	scaleX := float32(INPUT_SIZE) / float32(imageWidth)
+	scaleY := float32(INPUT_SIZE) / float32(imageHeight)
 
-			if channelIdx < numChannels {
-				score := output[channelIdx*numBoxes+i]
-				if score > maxClassScore {
-					maxClassScore = score
-					maxClassIndex = float32(j)
-				}
+	for idx := range numBoxes {
+		probability = float32(-1e9)
+
+		for col := range numClasses {
+			currentProb := output[numBoxes*(col+4)+idx]
+			if currentProb > probability {
+				probability = currentProb
+				classId = float32(col)
 			}
 		}
 
-		scoresData[i] = maxClassScore
-		classProbsData[i] = maxClassIndex
+		xc, yc := output[idx], output[numBoxes+idx]
+		w, h := output[2*numBoxes+idx], output[3*numBoxes+idx]
+		x1 := (xc - w/2)
+		y1 := (yc - h/2)
+		x2 := (xc + w/2)
+		y2 := (yc + h/2)
+
+		adjustedX1 := (x1 - float32(offsetX)) * scaleX
+		adjustedY1 := (y1 - float32(offsetY)) * scaleY
+		adjustedX2 := (x2 - float32(offsetX)) * scaleX
+		adjustedY2 := (y2 - float32(offsetY)) * scaleY
+
+		boundingBoxes = append(boundingBoxes, boundingBox{
+			classId:    classId,
+			confidence: probability,
+			x1:         adjustedX1,
+			y1:         adjustedY1 * 0.75,
+			x2:         adjustedX2,
+			y2:         adjustedY2 * 0.75,
+		})
+	}
+
+	sort.Slice(boundingBoxes, func(i, j int) bool {
+		return boundingBoxes[i].confidence > boundingBoxes[j].confidence
+	})
+
+	mergedResults := make([]boundingBox, 0, len(boundingBoxes))
+
+	for _, candidateBox := range boundingBoxes {
+		overlapsExistingBox := false
+		for _, existingBox := range mergedResults {
+			if (&candidateBox).iou(&existingBox) > 0.7 {
+				overlapsExistingBox = true
+				break
+			}
+		}
+		if !overlapsExistingBox {
+			mergedResults = append(mergedResults, candidateBox)
+		}
+	}
+
+	for i, bbox := range mergedResults {
+		classProbsData[i] = bbox.classId
+		scoresData[i] = bbox.confidence
+		boxesData[i*4] = bbox.y1
+		boxesData[i*4+1] = bbox.x1
+		boxesData[i*4+2] = bbox.y2
+		boxesData[i*4+3] = bbox.x2
 	}
 
 	boxesShape := []int{1, numBoxes, 4}
@@ -332,10 +471,6 @@ func getSharedLibPath() (string, error) {
 		}
 		return "../third_party/onnxruntime.so", nil
 	}
-	switch arch := strings.Join([]string{runtime.GOOS, runtime.GOARCH}, "-"); arch {
-	case "android-386":
-		return "../third_party/onnx-android-x86.so", nil
-	}
 	return "", errors.Errorf("Unable to find a version of the onnxruntime library supporting %s %s", runtime.GOOS, runtime.GOARCH)
 }
 
@@ -348,7 +483,7 @@ func createMetadata(outputInfo []ort.InputOutputInfo, labelPath string) mlmodel.
 	imageIn := mlmodel.TensorInfo{
 		Name:     "images",
 		DataType: "float32",
-		Shape:    []int{1, 3, 480, 640},
+		Shape:    []int{1, 3, IMAGE_SIZE, IMAGE_SIZE},
 	}
 	inputs = append(inputs, imageIn)
 	md.Inputs = inputs
@@ -390,10 +525,12 @@ func createMetadata(outputInfo []ort.InputOutputInfo, labelPath string) mlmodel.
 	return md
 }
 
-// func convertInt64SliceToInt(sliceInt64 []int64) []int {
-// 	sliceInt := make([]int, 0, len(sliceInt64))
-// 	for _, v := range sliceInt64 {
-// 		sliceInt = append(sliceInt, int(v))
-// 	}
-// 	return sliceInt
-// }
+func clamp(v float32, min, max float32) float32 {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
