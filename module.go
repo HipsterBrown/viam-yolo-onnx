@@ -457,19 +457,19 @@ func (yolo *yoloOnnxYoloOnnxCpu) processOutput(output []float32) (ml.Tensors, er
 func getSharedLibPath() (string, error) {
 	if runtime.GOOS == "windows" {
 		if runtime.GOARCH == "amd64" {
-			return "../third_party/onnxruntime.dll", nil
+			return "./third_party/onnxruntime.dll", nil
 		}
 	}
 	if runtime.GOOS == "darwin" {
 		if runtime.GOARCH == "arm64" {
-			return "../third_party/onnxruntime_arm64.dylib", nil
+			return "./third_party/onnxruntime_arm64.dylib", nil
 		}
 	}
 	if runtime.GOOS == "linux" {
 		if runtime.GOARCH == "arm64" {
-			return "../third_party/onnxruntime_arm64.so", nil
+			return "./third_party/onnxruntime_arm64.so", nil
 		}
-		return "../third_party/onnxruntime.so", nil
+		return "./third_party/onnxruntime.so", nil
 	}
 	return "", errors.Errorf("Unable to find a version of the onnxruntime library supporting %s %s", runtime.GOOS, runtime.GOARCH)
 }

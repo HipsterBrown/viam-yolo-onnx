@@ -3,7 +3,7 @@ MOD_OS := $(shell uname -s)
 
 GO_BUILD_ENV :=
 GO_BUILD_FLAGS :=
-MODULE_BINARY := bin/yolo-onnx
+MODULE_BINARY := yolo-onnx
 
 ifeq ($(VIAM_TARGET_OS), windows)
 	GO_BUILD_ENV += GOOS=windows GOARCH=amd64
@@ -24,18 +24,7 @@ update:
 test:
 	go test ./...
 
-# module.tar.gz: meta.json $(MODULE_BINARY)
-# ifeq ($(VIAM_TARGET_OS), windows)
-# 	jq '.entrypoint = "./bin/yolo-onnx.exe"' meta.json > temp.json && mv temp.json meta.json
-# else
-# 	strip $(MODULE_BINARY)
-# endif
-# 	tar czf $@ meta.json $(MODULE_BINARY) third_party/
-# ifeq ($(VIAM_TARGET_OS), windows)
-# 	git checkout meta.json
-# endif
-
-module.tar.gz: meta.json $(MODULE_BINARY)
+module.tar.gz: clean meta.json $(MODULE_BINARY)
 ifeq ($(VIAM_TARGET_OS),windows) # this needs to be at the top since windows is emulated
 	jq '.entrypoint = "./bin/yolo-onnx.exe"' meta.json > temp.json && mv temp.json meta.json
 	tar -czf $@ $(MODULE_BINARY) third_party/onnxruntime.dll meta.json
@@ -70,3 +59,6 @@ all: test module.tar.gz
 
 setup:
 	go mod tidy
+
+clean:
+	rm -rf module.tar.gz $(MODULE_BINARY)

@@ -13,7 +13,7 @@
     }
   ],
   "applications": null,
-  "entrypoint": "bin/yolo-onnx",
+  "entrypoint": "yolo-onnx",
   "first_run": "",
   "build": {
     "build": "make module.tar.gz",
