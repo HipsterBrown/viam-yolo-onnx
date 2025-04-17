@@ -33,18 +33,18 @@ ifeq ($(MOD_ARCH),x86_64)
 	@echo "Unsupported OS: $(MOD_OS) or architecture: $(MOD_ARCH)"
 else ifeq ($(MOD_ARCH),arm64)
 	strip $(MODULE_BINARY)
-	tar -czf $@ $(MODULE_BINARY) third_party/onnxruntime_arm64.dylib
+	tar -czf $@ $(MODULE_BINARY) third_party/onnxruntime_arm64.dylib meta.json
 endif
 else ifeq ($(MOD_OS),Linux)
 ifeq ($(MOD_ARCH),x86_64)
 	strip $(MODULE_BINARY)
-	tar -czf $@ $(MODULE_BINARY) third_party/onnxruntime.so
+	tar -czf $@ $(MODULE_BINARY) third_party/onnxruntime.so meta.json
 else ifeq ($(MOD_ARCH),arm64)
 	strip $(MODULE_BINARY)
-	tar -czf $@ $(MODULE_BINARY) third_party/onnxruntime_arm64.so
+	tar -czf $@ $(MODULE_BINARY) third_party/onnxruntime_arm64.so meta.json
 else ifeq ($(MOD_ARCH),aarch64)
 	strip $(MODULE_BINARY)
-	tar -czf $@ $(MODULE_BINARY) third_party/onnxruntime_arm64.so
+	tar -czf $@ $(MODULE_BINARY) third_party/onnxruntime_arm64.so meta.json
 endif
 else
 	@echo "Unsupported OS: $(MOD_OS) or architecture: $(MOD_ARCH)"
